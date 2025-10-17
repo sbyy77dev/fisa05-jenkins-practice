@@ -1,0 +1,53 @@
+node {
+    withCredentials([[$class: 'UsernamePasswordMultiBinding',
+                      credentialsId: 'docker-hub',
+                      usernameVariable: 'DOCKER_USER_ID',
+                      passwordVariable: 'DOCKER_USER_PASSWORD']]) {
+
+        stage('Pull') {
+            try {
+                git branch: 'main', url: 'https://github.com/sbyy77dev/fisa05-jenkins-practice.git'
+                echo "Stage Pull success"
+            } catch (Exception e) {
+                echo "Stage Pull failed"
+                throw e
+            }
+        }
+
+        stage('Build') {
+            sh(script: '''yes | sudo docker image prune -a''')
+            sh(script: '''sudo docker build -t fisa-app .''')
+            echo "Stage Build success"
+        }
+
+        stage('Tag') {
+            sh(script: '''sudo docker tag fisa-app ${DOCKER_USER_ID}/fisa-app:${BUILD_NUMBER}''')
+            echo "Stage Tag success"
+        }
+
+        stage('Push') {
+            sh(script: 'sudo docker login -u ${DOCKER_USER_ID} -p ${DOCKER_USER_PASSWORD}')
+            sh(script: 'sudo docker push ${DOCKER_USER_ID}/fisa-app:${BUILD_NUMBER}')
+            echo "Stage Push success"
+        }
+
+        stage('Deploy') {
+            sshagent(credentials: ['ec2-fastapi-server']) {
+                // BUILD_NUMBER가 1이 아닐 때만 (최초 실행이 아닐 때만) 컨테이너 삭제 명령 실행
+                if (env.BUILD_NUMBER.toInteger() != 1) {
+                    sh(script: 'ssh -o StrictHostKeyChecking=no ubuntu@3.38.183.119 "sudo docker rm -f docker-fastapi"')
+                } else {
+                    echo "Initial run (BUILD_NUMBER=${env.BUILD_NUMBER}). Skipping docker container removal."
+                }
+                sh(script: 'ssh -o StrictHostKeyChecking=no ubuntu@3.38.183.119 "pwd"')
+                sh(script: 'ssh -o StrictHostKeyChecking=no ubuntu@3.38.183.119 "sudo docker run --name docker-fastapi --env-file .env -e TZ=Asia/Seoul -p 80:8000 -d -t ${DOCKER_USER_ID}/fisa-app:${BUILD_NUMBER}"')
+            }
+            echo "Stage Deploy success"
+        }
+
+        stage('Cleaning up') {
+            sh "sudo docker rmi ${DOCKER_USER_ID}/fisa-app:${BUILD_NUMBER}"
+            echo "Stage Cleaning up success!!!"
+        }
+    }
+}
